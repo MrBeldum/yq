@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -23,6 +24,11 @@ type blockScalarOriginal struct {
 	style    Style
 	tag      string
 	anchor   string
+	// keyIndent is the indent of the header line at decode time; the block is
+	// spliced back verbatim only when the placeholder sits at the same indent
+	// (the node did not move), which guarantees the original bytes are still
+	// valid in place.
+	keyIndent int
 	// placeholder is assigned at encode time; the encoder swaps it back for
 	// rawBlock after dumping.
 	placeholder string
@@ -98,6 +104,10 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 	if strings.Contains(restOfHeader, "#") {
 		return nil
 	}
+	// The key indent anchors the block's position. An explicit indent
+	// indicator (e.g. `>2-`) is relative to it, so validation must use the
+	// same geometry or it falsely rejects blocks below the top level.
+	keyIndent := leadingSpaceCount(headerLine)
 
 	// The scalar's extent runs to the line before the next token in the
 	// stream. Block scalar content lines hold no tokens themselves.
@@ -112,10 +122,14 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 		endIdx = headerIdx + 1
 	}
 	contentLines := sourceLines[headerIdx+1 : endIdx]
-	// Don't let the span cross a document separator.
+	// Don't let the span cross a document separator or document-end marker.
+	// A column-0 `...` ends the document; capturing it as scalar content
+	// corrupts the block on re-indent (the marker is not content).
 	for i, line := range contentLines {
 		trimmed := strings.TrimSpace(line)
-		if (trimmed == "---" || strings.HasPrefix(trimmed, "--- ")) && leadingSpaceCount(line) == 0 {
+		if leadingSpaceCount(line) == 0 &&
+			(trimmed == "---" || strings.HasPrefix(trimmed, "--- ") ||
+				trimmed == "..." || strings.HasPrefix(trimmed, "... ")) {
 			contentLines = contentLines[:i]
 			break
 		}
@@ -132,7 +146,7 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 	trailing := trailingNewlineCount(node.Value)
 	if baseIndent == -1 {
 		// Empty (or all-blank) block scalar.
-		return validateAndBuildRaw(node, headerToken, nil, trailing)
+		return validateAndBuildRaw(node, headerToken, nil, trailing, keyIndent)
 	}
 	// Trim trailing blank lines and trailing comment lines that sit outside
 	// the scalar (indented less than the block indent). An indented `#` line
@@ -151,7 +165,7 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 		}
 		break
 	}
-	return validateAndBuildRaw(node, headerToken, trimmed, trailing)
+	return validateAndBuildRaw(node, headerToken, trimmed, trailing, keyIndent)
 }
 
 // extractHeaderToken pulls the block scalar header (e.g. ">-", ">+", ">2-")
@@ -172,9 +186,11 @@ func extractHeaderToken(s string) string {
 // validateAndBuildRaw constructs the raw block text from the header token and
 // content lines (kept verbatim, original indent), appending trailing newlines
 // per the parsed value, then validates it re-parses to the same value.
-// The spliced output adds a newline after the block, so we include one fewer
-// trailing newline here than the value holds.
-func validateAndBuildRaw(node *CandidateNode, headerToken string, contentLines []string, trailing int) *blockScalarOriginal {
+// keyIndent is the header line's indent; the check mirrors it because an
+// explicit indent indicator is relative to the key. The spliced output adds a
+// newline after the block, so we include one fewer trailing newline here than
+// the value holds.
+func validateAndBuildRaw(node *CandidateNode, headerToken string, contentLines []string, trailing int, keyIndent int) *blockScalarOriginal {
 	var sb strings.Builder
 	sb.WriteString(headerToken)
 	for _, line := range contentLines {
@@ -186,22 +202,24 @@ func validateAndBuildRaw(node *CandidateNode, headerToken string, contentLines [
 	}
 	rawBlock := sb.String()
 
-	if !rawBlockRoundTrips(rawBlock, node.Value) {
+	if !rawBlockRoundTripsAtIndent(rawBlock, node.Value, keyIndent) {
 		return nil
 	}
 	return &blockScalarOriginal{
-		rawBlock: rawBlock,
-		value:    node.Value,
-		style:    node.Style,
-		tag:      node.Tag,
-		anchor:   node.Anchor,
+		rawBlock:  rawBlock,
+		value:     node.Value,
+		style:     node.Style,
+		tag:       node.Tag,
+		anchor:    node.Anchor,
+		keyIndent: keyIndent,
 	}
 }
 
-// rawBlockRoundTrips checks that rawBlock (a block header plus content lines)
-// parses as a block scalar with the expected value.
-func rawBlockRoundTrips(rawBlock, expectedValue string) bool {
-	doc := "key: " + rawBlock + "\n"
+// rawBlockRoundTripsAtIndent checks that rawBlock (a block header plus
+// content lines) parses as a block scalar with the expected value, with the
+// key placed at keyIndent to mirror the block's actual position.
+func rawBlockRoundTripsAtIndent(rawBlock, expectedValue string, keyIndent int) bool {
+	doc := strings.Repeat(" ", keyIndent) + "key: " + rawBlock + "\n"
 	var n yaml.Node
 	if err := yaml.Unmarshal([]byte(doc), &n); err != nil {
 		return false
@@ -256,16 +274,61 @@ func spliceFoldPreserves(output []byte, preserves []*blockScalarOriginal, indent
 		for lineStart+lineIndent < idx && result[lineStart+lineIndent] == ' ' {
 			lineIndent++
 		}
-		// Re-indent the block to fit: content goes at the placeholder line's
-		// indent plus the configured indent width.
-		replacement := []byte(reindentBlock(p.rawBlock, lineIndent+indentPref))
-		merged := make([]byte, 0, len(result)-len(ph)+len(replacement))
+		newIndent := lineIndent + indentPref
+		var replacement string
+		if lineIndent == p.keyIndent {
+			// The node did not move: the original bytes parsed successfully at
+			// this indent, so splicing them back verbatim is guaranteed valid
+			// and value-identical. This preserves explicit indent indicators
+			// (e.g. `>2-`) and the original content indent byte-for-byte.
+			replacement = p.rawBlock
+		} else {
+			// The node moved (or the indent preference changed): re-indent the
+			// block to fit its new position.
+			replacement = reindentBlock(p.rawBlock, newIndent)
+		}
+		// Never trust the spliced text blindly: it must re-parse to the same
+		// scalar value at its actual position. If it does not, fall back to a
+		// safely-quoted rendering of the folded value rather than risk
+		// emitting a corrupt document.
+		if !rawBlockRoundTripsAtIndent(replacement, p.value, lineIndent) {
+			replacement = safeScalarFallback(p.value)
+		}
+		rb := []byte(replacement)
+		merged := make([]byte, 0, len(result)-len(ph)+len(rb))
 		merged = append(merged, result[:idx]...)
-		merged = append(merged, replacement...)
+		merged = append(merged, rb...)
 		merged = append(merged, result[idx+len(ph):]...)
 		result = merged
 	}
 	return result
+}
+
+// safeScalarFallback renders value as a YAML scalar guaranteed to parse back
+// to the same value. It is only used when a spliced block fails re-validation
+// (defence in depth): the folded value survives even though the original line
+// breaks are lost.
+func safeScalarFallback(value string) string {
+	out, err := yaml.Marshal(value)
+	if err != nil {
+		return strconv.Quote(value)
+	}
+	return strings.TrimSuffix(string(out), "\n")
+}
+
+// baseIndentOf returns the minimum indent of the non-blank content lines of
+// a raw block (its original base indent), or -1 when there are none.
+func baseIndentOf(rawBlock string) int {
+	lines := strings.Split(rawBlock, "\n")
+	baseIndent := -1
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" {
+			if ind := leadingSpaceCount(line); baseIndent == -1 || ind < baseIndent {
+				baseIndent = ind
+			}
+		}
+	}
+	return baseIndent
 }
 
 // reindentBlock shifts a raw block's content lines to newIndent, preserving
@@ -290,15 +353,7 @@ func reindentBlock(rawBlock string, newIndent int) string {
 		return header
 	}
 	// Find the original base indent (minimum indent of non-blank content lines).
-	baseIndent := -1
-	for _, line := range lines[1:] {
-		if strings.TrimSpace(line) != "" {
-			ind := leadingSpaceCount(line)
-			if baseIndent == -1 || ind < baseIndent {
-				baseIndent = ind
-			}
-		}
-	}
+	baseIndent := baseIndentOf(rawBlock)
 	if baseIndent == -1 {
 		return header
 	}
