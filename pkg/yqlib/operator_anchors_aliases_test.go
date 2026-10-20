@@ -87,8 +87,8 @@ var explodeWhenKeysExistLegacy = `D0, P[], (!!map)::objects:
       shape: round
     - name: circle
       shape: round
-    - shape: round
-      name: egg
+    - name: egg
+      shape: round
 `
 
 var explodeWhenKeysExistExpected = `D0, P[], (!!map)::objects:
@@ -96,8 +96,8 @@ var explodeWhenKeysExistExpected = `D0, P[], (!!map)::objects:
       shape: round
     - name: ellipse
       shape: round
-    - shape: round
-      name: egg
+    - name: egg
+      shape: round
 `
 
 var fixedAnchorOperatorScenarios = []expressionScenario{
@@ -148,7 +148,7 @@ var fixedAnchorOperatorScenarios = []expressionScenario{
 		subdescription: "Taken from https://yaml.org/type/merge.html. Same values as legacy, but with the correct key order.",
 		document:       specDocument + "- << : [ *BIG, *LEFT, *SMALL ]\n  x: 1\n",
 		expression:     ".[4] | explode(.)",
-		expected:       []string{"D0, P[4], (!!map)::r: 10\ny: 2\nx: 1\n"},
+		expected:       []string{"D0, P[4], (!!map)::r: 10\nx: 1\ny: 2\n"},
 	},
 	{
 		description: "Exploding inline merge anchor",
@@ -601,6 +601,40 @@ var anchorOperatorScenarios = []expressionScenario{
 		expression:  `({} | .a.b alias="foo") * .`,
 		expected: []string{
 			"D0, P[], (!!map)::{a: {b: *foo}}\n",
+		},
+	},
+	{
+		skipDoc:     true,
+		description: "Exploding nested merge anchors retains key order (issue #2189)",
+		document: `.global-config: &global-config
+  first: foo
+  second: bar
+  third: baz
+.local-config: &local-config
+  <<: *global-config
+  first: FOO
+final-config:
+  <<: *local-config
+`,
+		expression: `explode(.)`,
+		expected: []string{
+			"D0, P[], (!!map)::.global-config:\n    first: foo\n    second: bar\n    third: baz\n.local-config:\n    first: FOO\n    second: bar\n    third: baz\nfinal-config:\n    first: FOO\n    second: bar\n    third: baz\n",
+		},
+	},
+	{
+		skipDoc:     true,
+		description: "Exploding merge anchor with overriding key retains merge position (issue #2189)",
+		document: `base: &base
+  a: 1
+  b: 2
+top:
+  <<: *base
+  a: 99
+`,
+		expression: `explode(.) | .top | keys | .[]`,
+		expected: []string{
+			"D0, P[0], (!!str)::a\n",
+			"D0, P[1], (!!str)::b\n",
 		},
 	},
 }

@@ -455,8 +455,8 @@ yq '.[4] | explode(.)' sample.yml
 will output
 ```yaml
 r: 10
-y: 2
 x: 1
+y: 2
 ```
 
 ## Exploding inline merge anchor

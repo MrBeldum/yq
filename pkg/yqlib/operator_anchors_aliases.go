@@ -140,8 +140,20 @@ func explodeOperator(d *dataTreeNavigator, context Context, expressionNode *Expr
 	return context, nil
 }
 
+func indexOfKeyInContent(content []*CandidateNode, key string) int {
+	for index := 0; index < len(content)-1; index = index + 2 {
+		if content[index].Value == key {
+			return index
+		}
+	}
+	return -1
+}
+
 func fixedReconstructAliasedMap(node *CandidateNode) error {
 	var newContent = []*CandidateNode{}
+	// keys introduced by a merge key; an explicit key with the same name overrides
+	// the merged value in place instead of being appended, retaining key order.
+	mergedKeys := map[string]bool{}
 
 	for index := 0; index < len(node.Content); index = index + 2 {
 		keyNode := node.Content[index]
@@ -155,7 +167,13 @@ func fixedReconstructAliasedMap(node *CandidateNode) error {
 			if err := explodeNode(valueNode, Context{}); err != nil {
 				return err
 			}
-			newContent = append(newContent, keyNode, valueNode)
+			if mergedKeys[keyNode.Value] {
+				// explicit key overrides a merged key: keep the merge position.
+				delete(mergedKeys, keyNode.Value)
+				newContent[indexOfKeyInContent(newContent, keyNode.Value)+1] = valueNode
+			} else {
+				newContent = append(newContent, keyNode, valueNode)
+			}
 		} else {
 			sequence := valueNode
 			if sequence.Kind == AliasNode {
@@ -178,14 +196,19 @@ func fixedReconstructAliasedMap(node *CandidateNode) error {
 					return fmt.Errorf("can only use merge anchors with maps (!!map) or sequences (!!seq) of maps, but got sequence containing %v", mergeNodeSeq.Tag)
 				}
 				itemsToAdd := mergeNodeSeq.FilterMapContentByKey(func(keyNode *CandidateNode) bool {
-					return getContentValueByKey(node.Content, keyNode.Value) == nil &&
-						getContentValueByKey(newContent, keyNode.Value) == nil
+					// merged keys are added at the merge key position, even when an
+					// explicit key overrides them; only skip keys already added by
+					// an earlier merge source so the first source wins.
+					return getContentValueByKey(newContent, keyNode.Value) == nil
 				})
 
-				for _, item := range itemsToAdd {
-					copied := item.Copy()
+				for itemIndex := 0; itemIndex < len(itemsToAdd); itemIndex = itemIndex + 2 {
+					copied := itemsToAdd[itemIndex+1].Copy()
+					copiedKey := itemsToAdd[itemIndex].Copy()
+					copiedKey.Parent = node
 					copied.Parent = node
-					newContent = append(newContent, copied)
+					newContent = append(newContent, copiedKey, copied)
+					mergedKeys[copiedKey.Value] = true
 				}
 			}
 		}
@@ -317,11 +340,44 @@ func applyAlias(node *CandidateNode, alias *CandidateNode, aliasIndex int, newCo
 		keyNode := alias.Content[index]
 		log.Debugf("applying alias key %v", keyNode.Value)
 		valueNode := alias.Content[index+1]
-		err := overrideEntry(node, keyNode, valueNode, aliasIndex, newContent)
+		err := applyMergeEntry(keyNode, valueNode, newContent)
 		if err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// applyMergeEntry adds a single merged key/value pair at the merge key position.
+// Unlike overrideEntry it never skips keys shadowed by later explicit keys: the
+// merged entry keeps the merge position and an explicit key processed later
+// overrides its value in place, retaining key order (see issue #2189).
+func applyMergeEntry(key *CandidateNode, value *CandidateNode, newContent Context) error {
+	err := explodeNode(value, newContent)
+
+	if err != nil {
+		return err
+	}
+
+	for newEl := newContent.MatchingNodes.Front(); newEl != nil; newEl = newEl.Next() {
+		valueEl := newEl.Next() // move forward twice
+		keyNode := newEl.Value.(*CandidateNode)
+		log.Debugf("checking new content %v:%v", keyNode.Value, valueEl.Value.(*CandidateNode).Value)
+		if keyNode.Value == key.Value && keyNode.Alias == nil && key.Alias == nil {
+			log.Debugf("overriding new content")
+			valueEl.Value = value
+			return nil
+		}
+		newEl = valueEl // move forward twice
+	}
+
+	err = explodeNode(key, newContent)
+	if err != nil {
+		return err
+	}
+	log.Debugf("adding %v:%v", key.Value, value.Value)
+	newContent.MatchingNodes.PushBack(key)
+	newContent.MatchingNodes.PushBack(value)
 	return nil
 }
 
