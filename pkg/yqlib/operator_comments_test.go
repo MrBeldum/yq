@@ -305,6 +305,42 @@ var commentOperatorScenarios = []expressionScenario{
 			"D0, P[], (!!map)::{a: {b: null, # hi\n        # hi\n\n        # hi\n}}\n",
 		},
 	},
+	{
+		description: "Get foot comment attached by the parser to the key node",
+		skipDoc:     true,
+		document:    "a:\n  - b: \"1\" # xyz\n    # abc\n",
+		expression:  `.a[0].b | foot_comment`,
+		expected: []string{
+			"D0, P[a 0 b], (!!str)::abc\n",
+		},
+	},
+	{
+		description: "Get foot comment from the key node still works",
+		skipDoc:     true,
+		document:    "a:\n  - b: \"1\" # xyz\n    # abc\n",
+		expression:  `.a[0].b | key | foot_comment`,
+		expected: []string{
+			"D0, P[a 0 b], (!!str)::abc\n",
+		},
+	},
+	{
+		description: "Assign foot comment replaces the key node foot comment instead of duplicating it",
+		skipDoc:     true,
+		document:    "a:\n  - b: \"1\" # xyz\n    # abc\n",
+		expression:  `.a[0].b foot_comment = "def"`,
+		expected: []string{
+			"D0, P[], (!!map)::a:\n    - b: \"1\" # xyz\n      # def\n",
+		},
+	},
+	{
+		description: "Get foot comment of a nested map value",
+		skipDoc:     true,
+		document:    "a:\n  b: 1\n# foot\n",
+		expression:  `.a | foot_comment`,
+		expected: []string{
+			"D0, P[a], (!!str)::foot\n",
+		},
+	},
 }
 
 func TestCommentOperatorScenarios(t *testing.T) {

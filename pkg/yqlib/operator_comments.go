@@ -66,6 +66,12 @@ func assignCommentsOperator(d *dataTreeNavigator, context Context, expressionNod
 		}
 		if preferences.FootComment {
 			candidate.FootComment = comment
+			// The underlying yaml parser attaches a map entry's foot comment to the
+			// key node, so clear it there - otherwise the old comment is printed as
+			// well as the new one (see mikefarah/yq#2483).
+			if candidate.Key != nil && !candidate.IsMapKey {
+				candidate.Key.FootComment = ""
+			}
 		}
 
 	}
@@ -108,6 +114,12 @@ func getCommentsOperator(_ *dataTreeNavigator, context Context, expressionNode *
 			comment = candidate.HeadComment
 		} else if preferences.FootComment {
 			comment = candidate.FootComment
+			// The underlying yaml parser attaches a map entry's foot comment to the
+			// key node rather than the value, so fall back to the key's foot comment
+			// to make it retrievable from the value (see mikefarah/yq#2483).
+			if comment == "" && candidate.Key != nil && !candidate.IsMapKey {
+				comment = candidate.Key.FootComment
+			}
 		}
 		comment = startCommentCharacterRegExp.ReplaceAllString(comment, "")
 		comment = subsequentCommentCharacterRegExp.ReplaceAllString(comment, "\n")
