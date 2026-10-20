@@ -33,7 +33,7 @@ func (ke *kyamlEncoder) PrintLeadingContent(writer io.Writer, content string) er
 
 func (ke *kyamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 	log.Debugf("encoderKYaml - going to print %v", NodeToString(node))
-	if node.Kind == ScalarNode && ke.prefs.UnwrapScalar {
+	if node.Kind == ScalarNode && ke.prefs.UnwrapScalar && canUnwrapScalar(node) {
 		return writeString(writer, node.Value+"\n")
 	}
 

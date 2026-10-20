@@ -112,6 +112,48 @@ var yamlFormatScenarios = []formatScenario{
 		input:       "field: Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt",
 		expected:    "field: Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt\n",
 	},
+	{
+		description: "single quoted empty string round trips (issue #2287)",
+		skipDoc:     true,
+		input:       "''",
+		expected:    "''\n",
+	},
+	{
+		description: "single quoted single quote round trips (issue #2287)",
+		skipDoc:     true,
+		input:       "''''",
+		expected:    "''''\n",
+	},
+	{
+		description: "double quoted empty string round trips",
+		skipDoc:     true,
+		input:       `""`,
+		expected:    "\"\"\n",
+	},
+	{
+		description: "single quoted string that would resolve to bool stays quoted",
+		skipDoc:     true,
+		input:       "'true'",
+		expected:    "'true'\n",
+	},
+	{
+		description: "single quoted string with leading space stays quoted",
+		skipDoc:     true,
+		input:       "' leading'",
+		expected:    "' leading'\n",
+	},
+	{
+		description: "single quoted string unwraps when the raw value round trips",
+		skipDoc:     true,
+		input:       "'hello'",
+		expected:    "hello\n",
+	},
+	{
+		description: "literal block scalar still unwraps to raw text",
+		skipDoc:     true,
+		input:       "|\n  line1\n  line2\n",
+		expected:    "line1\nline2\n\n",
+	},
 }
 
 var yamlParseScenarios = []expressionScenario{

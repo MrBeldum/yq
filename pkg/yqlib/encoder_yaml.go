@@ -29,6 +29,39 @@ func (ye *yamlEncoder) PrintLeadingContent(writer io.Writer, content string) err
 	return PrintYAMLLeadingContent(writer, content, ye.prefs.PrintDocSeparators, ye.prefs.ColorsEnabled)
 }
 
+// canUnwrapScalar reports whether writing the scalar's raw value produces
+// YAML that reads back as the same scalar. The unwrap fast path writes
+// node.Value verbatim; for values that cannot be represented as a plain
+// scalar (e.g. an empty quoted string, a lone quote, or a string like
+// 'true' that would resolve to a non-string) that would corrupt the output,
+// so the encoder falls back to normal styled output instead.
+func canUnwrapScalar(node *CandidateNode) bool {
+	// Only scalars that were explicitly quoted in the source document can lose
+	// information when unwrapped; plain and generated scalars keep the
+	// long-standing unwrap behaviour.
+	if node.Style&(SingleQuotedStyle|DoubleQuotedStyle) == 0 {
+		return true
+	}
+	value := node.Value
+	if strings.Contains(value, "\n") {
+		// multi-line values are written out raw, preserving long-standing behaviour
+		return true
+	}
+	if value == "" {
+		// an empty plain scalar reads back as null, not as an empty string
+		return false
+	}
+	var decoded yaml.Node
+	if err := yaml.Unmarshal([]byte(value), &decoded); err != nil {
+		return false
+	}
+	if len(decoded.Content) != 1 {
+		return false
+	}
+	content := decoded.Content[0]
+	return content.Kind == yaml.ScalarNode && content.Tag == node.Tag && content.Value == value
+}
+
 func (ye *yamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 	log.Debugf("encoderYaml - going to print %v", NodeToString(node))
 	// Detect line ending style from LeadingContent
@@ -36,7 +69,7 @@ func (ye *yamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 	if strings.Contains(node.LeadingContent, "\r\n") {
 		lineEnding = "\r\n"
 	}
-	if node.Kind == ScalarNode && ye.prefs.UnwrapScalar {
+	if node.Kind == ScalarNode && ye.prefs.UnwrapScalar && canUnwrapScalar(node) {
 		valueToPrint := node.Value
 		if node.LeadingContent == "" || valueToPrint != "" {
 			valueToPrint = valueToPrint + lineEnding
