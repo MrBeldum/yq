@@ -15,6 +15,7 @@ type xmlEncoder struct {
 	writer         io.Writer
 	prefs          XmlPreferences
 	leadingContent string
+	depth          int
 }
 
 func NewXMLEncoder(prefs XmlPreferences) Encoder {
@@ -23,7 +24,7 @@ func NewXMLEncoder(prefs XmlPreferences) Encoder {
 	for index := 0; index < prefs.Indent; index++ {
 		indentString = indentString + " "
 	}
-	return &xmlEncoder{indentString, nil, prefs, ""}
+	return &xmlEncoder{indentString, nil, prefs, "", 0}
 }
 
 func (e *xmlEncoder) CanHandleAliases() bool {
@@ -150,12 +151,12 @@ func (e *xmlEncoder) encodeTopLevelMap(encoder *xml.Encoder, node *CandidateNode
 				return err
 			}
 		}
-		err = e.encodeComment(encoder, footComment(key))
+		err = e.encodeCommentOnOwnLine(encoder, footComment(key))
 		if err != nil {
 			return err
 		}
 	}
-	return e.encodeComment(encoder, footComment(node))
+	return e.encodeCommentOnOwnLine(encoder, footComment(node))
 }
 
 func (e *xmlEncoder) encodeStart(encoder *xml.Encoder, node *CandidateNode, start xml.StartElement) error {
@@ -163,15 +164,17 @@ func (e *xmlEncoder) encodeStart(encoder *xml.Encoder, node *CandidateNode, star
 	if err != nil {
 		return err
 	}
+	e.depth++
 	return e.encodeComment(encoder, headComment(node))
 }
 
 func (e *xmlEncoder) encodeEnd(encoder *xml.Encoder, node *CandidateNode, start xml.StartElement) error {
+	e.depth--
 	err := encoder.EncodeToken(start.End())
 	if err != nil {
 		return err
 	}
-	return e.encodeComment(encoder, footComment(node))
+	return e.encodeCommentOnOwnLine(encoder, footComment(node))
 }
 
 func (e *xmlEncoder) doEncode(encoder *xml.Encoder, node *CandidateNode, start xml.StartElement) error {
@@ -204,6 +207,21 @@ func (e *xmlEncoder) doEncode(encoder *xml.Encoder, node *CandidateNode, start x
 var xmlEncodeMultilineCommentRegex = regexp.MustCompile(`(^|\n) *# ?(.*)`)
 var xmlEncodeSingleLineCommentRegex = regexp.MustCompile(`^\s*#(.*)\n?`)
 var chompRegexp = regexp.MustCompile(`\n$`)
+
+// encodeCommentOnOwnLine writes a head or foot comment on its own line,
+// indented to the current element depth. Go's xml printer indents element
+// start/end tokens itself, so the newline following the comment is left for
+// the next token to write.
+func (e *xmlEncoder) encodeCommentOnOwnLine(encoder *xml.Encoder, commentStr string) error {
+	if commentStr == "" {
+		return nil
+	}
+	indent := xml.CharData("\n" + strings.Repeat(e.indentString, e.depth))
+	if err := encoder.EncodeToken(indent); err != nil {
+		return err
+	}
+	return e.encodeComment(encoder, commentStr)
+}
 
 func (e *xmlEncoder) encodeComment(encoder *xml.Encoder, commentStr string) error {
 	if commentStr != "" {
@@ -240,7 +258,7 @@ func (e *xmlEncoder) encodeComment(encoder *xml.Encoder, commentStr string) erro
 
 func (e *xmlEncoder) encodeArray(encoder *xml.Encoder, node *CandidateNode, start xml.StartElement) error {
 
-	if err := e.encodeComment(encoder, headAndLineComment(node)); err != nil {
+	if err := e.encodeCommentOnOwnLine(encoder, headAndLineComment(node)); err != nil {
 		return err
 	}
 
@@ -250,7 +268,7 @@ func (e *xmlEncoder) encodeArray(encoder *xml.Encoder, node *CandidateNode, star
 			return err
 		}
 	}
-	return e.encodeComment(encoder, footComment(node))
+	return e.encodeCommentOnOwnLine(encoder, footComment(node))
 }
 
 func (e *xmlEncoder) isAttribute(name string) bool {
@@ -288,7 +306,7 @@ func (e *xmlEncoder) encodeMap(encoder *xml.Encoder, node *CandidateNode, start 
 		key := node.Content[i]
 		value := node.Content[i+1]
 
-		err := e.encodeComment(encoder, headAndLineComment(key))
+		err := e.encodeCommentOnOwnLine(encoder, headAndLineComment(key))
 		if err != nil {
 			return err
 		}
@@ -325,7 +343,7 @@ func (e *xmlEncoder) encodeMap(encoder *xml.Encoder, node *CandidateNode, start 
 				return err
 			}
 		}
-		err = e.encodeComment(encoder, footComment(key))
+		err = e.encodeCommentOnOwnLine(encoder, footComment(key))
 		if err != nil {
 			return err
 		}

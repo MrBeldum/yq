@@ -484,10 +484,12 @@ header comment
 above_cat
 -->
 <!-- inline_cat -->
-<cat><!-- above_array inline_array -->
+<cat>
+  <!-- above_array inline_array -->
   <array>val1<!-- inline_val1 --></array>
   <array><!-- above_val2 -->val2<!-- inline_val2 --></array>
-</cat><!-- below_cat -->
+</cat>
+<!-- below_cat -->
 ```
 
 ## Encode: doctype and xml declaration
@@ -547,15 +549,21 @@ yq sample.xml
 will output
 ```xml
 <!-- before cat -->
-<cat><!-- in cat before -->
+<cat>
+  <!-- in cat before -->
   <x>3<!-- multi
 line comment 
-for x --></x><!-- before y -->
-  <y><!-- in y before
+for x --></x>
+  <!-- before y -->
+  <y>
+    <!-- in y before
 in d before -->
-    <d>z<!-- in d after --></d><!-- in y after -->
-  </y><!-- in_cat_after -->
-</cat><!-- after cat -->
+    <d>z<!-- in d after --></d>
+    <!-- in y after -->
+  </y>
+  <!-- in_cat_after -->
+</cat>
+<!-- after cat -->
 ```
 
 ## Roundtrip: with doctype and declaration
