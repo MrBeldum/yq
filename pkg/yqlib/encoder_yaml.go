@@ -94,7 +94,13 @@ func (ye *yamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 
 	if len(preserves) > 0 {
 		// Swap placeholders for the original folded block text.
-		spliced := spliceFoldPreserves(tempBuffer.Bytes(), preserves)
+		indent := ye.prefs.Indent
+		if indent < 2 {
+			indent = 2
+		} else if indent > 9 {
+			indent = 9
+		}
+		spliced := spliceFoldPreserves(tempBuffer.Bytes(), preserves, indent)
 		tempBuffer.Reset()
 		tempBuffer.Write(spliced)
 	}

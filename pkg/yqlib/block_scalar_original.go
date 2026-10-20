@@ -89,6 +89,15 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 		return nil
 	}
 	blockStart := searchFrom + relIdx
+	// Extract just the header token (e.g. ">-", ">+", ">2-"), not trailing comments.
+	headerToken := extractHeaderToken(headerLine[blockStart:])
+	// If the header line has a trailing comment, skip preservation: the
+	// comment is stored separately as a line comment and would be emitted in
+	// the wrong place after splicing.
+	restOfHeader := headerLine[blockStart+len(headerToken):]
+	if strings.Contains(restOfHeader, "#") {
+		return nil
+	}
 
 	// The scalar's extent runs to the line before the next token in the
 	// stream. Block scalar content lines hold no tokens themselves.
@@ -123,7 +132,7 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 	trailing := trailingNewlineCount(node.Value)
 	if baseIndent == -1 {
 		// Empty (or all-blank) block scalar.
-		return validateAndBuildRaw(node, headerLine[blockStart:], nil, trailing)
+		return validateAndBuildRaw(node, headerToken, nil, trailing)
 	}
 	// Trim trailing blank lines and trailing comment lines that sit outside
 	// the scalar (indented less than the block indent). An indented `#` line
@@ -142,7 +151,22 @@ func captureFoldedScalar(node *CandidateNode, sourceLines []string, nodeLines []
 		}
 		break
 	}
-	return validateAndBuildRaw(node, headerLine[blockStart:], trimmed, trailing)
+	return validateAndBuildRaw(node, headerToken, trimmed, trailing)
+}
+
+// extractHeaderToken pulls the block scalar header (e.g. ">-", ">+", ">2-")
+// from the start of s, stopping before whitespace or comments.
+func extractHeaderToken(s string) string {
+	i := 1 // skip '>' or '|'
+	for i < len(s) {
+		c := s[i]
+		if c == '-' || c == '+' || (c >= '0' && c <= '9') {
+			i++
+		} else {
+			break
+		}
+	}
+	return s[:i]
 }
 
 // validateAndBuildRaw constructs the raw block text from the header token and
@@ -213,9 +237,9 @@ func collectFoldPreservesWithPrefix(node *CandidateNode, preserves *[]*blockScal
 
 // spliceFoldPreserves replaces placeholders in dumped output with the original
 // block text. A placeholder is only replaced when it appears exactly once
-// (ruling out collisions with user data) and the captured block's content is
-// more indented than the placeholder's line (keeping the splice valid YAML).
-func spliceFoldPreserves(output []byte, preserves []*blockScalarOriginal) []byte {
+// (ruling out collisions with user data). The block is re-indented to fit the
+// placeholder's position, preserving the original line breaks.
+func spliceFoldPreserves(output []byte, preserves []*blockScalarOriginal, indentPref int) []byte {
 	result := output
 	for _, p := range preserves {
 		if p.placeholder == "" {
@@ -232,10 +256,9 @@ func spliceFoldPreserves(output []byte, preserves []*blockScalarOriginal) []byte
 		for lineStart+lineIndent < idx && result[lineStart+lineIndent] == ' ' {
 			lineIndent++
 		}
-		if !blockFitsIndent(p.rawBlock, lineIndent) {
-			continue
-		}
-		replacement := []byte(p.rawBlock)
+		// Re-indent the block to fit: content goes at the placeholder line's
+		// indent plus the configured indent width.
+		replacement := []byte(reindentBlock(p.rawBlock, lineIndent+indentPref))
 		merged := make([]byte, 0, len(result)-len(ph)+len(replacement))
 		merged = append(merged, result[:idx]...)
 		merged = append(merged, replacement...)
@@ -245,19 +268,58 @@ func spliceFoldPreserves(output []byte, preserves []*blockScalarOriginal) []byte
 	return result
 }
 
-// blockFitsIndent reports whether rawBlock's content lines are all more
-// indented than indent, so splicing it at that indent stays valid YAML.
-func blockFitsIndent(rawBlock string, indent int) bool {
+// reindentBlock shifts a raw block's content lines to newIndent, preserving
+// relative indentation and line breaks. The header keeps its chomping
+// indicator but drops any explicit indent indicator (which may not suit the
+// new position).
+func reindentBlock(rawBlock string, newIndent int) string {
 	lines := strings.Split(rawBlock, "\n")
+	if len(lines) == 0 {
+		return rawBlock
+	}
+	header := lines[0]
+	// Extract chomping indicator (-, +, or none); drop explicit indent digits.
+	chomping := ""
+	if strings.Contains(header, "-") {
+		chomping = "-"
+	} else if strings.Contains(header, "+") {
+		chomping = "+"
+	}
+	header = ">" + chomping
+	if len(lines) <= 1 {
+		return header
+	}
+	// Find the original base indent (minimum indent of non-blank content lines).
+	baseIndent := -1
 	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) != "" {
+			ind := leadingSpaceCount(line)
+			if baseIndent == -1 || ind < baseIndent {
+				baseIndent = ind
+			}
+		}
+	}
+	if baseIndent == -1 {
+		return header
+	}
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, line := range lines[1:] {
+		sb.WriteString("\n")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if leadingSpaceCount(line) <= indent {
-			return false
+		// Shift: strip original base indent, apply new indent.
+		content := line
+		if len(line) >= baseIndent {
+			content = line[baseIndent:]
+		} else {
+			content = strings.TrimLeft(line, " ")
 		}
+		sb.WriteString(strings.Repeat(" ", newIndent))
+		sb.WriteString(content)
 	}
-	return true
+	return sb.String()
 }
 
 func leadingSpaceCount(line string) int {
