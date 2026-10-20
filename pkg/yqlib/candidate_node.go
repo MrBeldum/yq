@@ -120,6 +120,11 @@ type CandidateNode struct {
 	// EncodeHint controls how a mapping node is serialised by format-specific encoders
 	// (e.g. TOML, HCL) that support both inline and block/section representations.
 	EncodeHint EncodeHint
+
+	// blockScalarOriginal preserves the source layout of a folded block scalar
+	// captured at decode time. Nil unless the node was decoded from a folded
+	// block scalar whose text round-trips cleanly (see block_scalar_original.go).
+	blockScalarOriginal *blockScalarOriginal
 }
 
 func (n *CandidateNode) CreateChild() *CandidateNode {

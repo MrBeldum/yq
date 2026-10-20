@@ -46,7 +46,11 @@ func (ye *yamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 
 	destination := writer
 	tempBuffer := bytes.NewBuffer(nil)
-	if ye.prefs.ColorsEnabled {
+	// Buffer the output when placeholders need splicing (issue #1468) so the
+	// original folded block text can be swapped back in after dumping.
+	var preserves []*blockScalarOriginal
+	collectFoldPreserves(node, &preserves)
+	if ye.prefs.ColorsEnabled || len(preserves) > 0 {
 		destination = tempBuffer
 	}
 
@@ -88,8 +92,19 @@ func (ye *yamlEncoder) Encode(writer io.Writer, node *CandidateNode) error {
 		return err
 	}
 
+	if len(preserves) > 0 {
+		// Swap placeholders for the original folded block text.
+		spliced := spliceFoldPreserves(tempBuffer.Bytes(), preserves)
+		tempBuffer.Reset()
+		tempBuffer.Write(spliced)
+	}
+
 	if ye.prefs.ColorsEnabled {
 		return colorizeAndPrint(tempBuffer.Bytes(), writer)
+	}
+	if destination == tempBuffer {
+		_, err := tempBuffer.WriteTo(writer)
+		return err
 	}
 	return nil
 }

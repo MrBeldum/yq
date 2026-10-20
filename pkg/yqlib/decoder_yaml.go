@@ -30,6 +30,11 @@ type yamlDecoder struct {
 	// anchor map persists over multiple documents for convenience.
 	anchorMap map[string]*CandidateNode
 
+	// sourceLines holds the decoded stream split into lines, so folded block
+	// scalars can be mapped back to their original text (issue #1468).
+	// yaml.Node line numbers are 1-based into this slice.
+	sourceLines []string
+
 	readAnything  bool
 	firstFile     bool
 	documentIndex uint
@@ -131,11 +136,24 @@ func (dec *yamlDecoder) Init(reader io.Reader) error {
 	}
 	dec.leadingContent = leadingContent
 	dec.readAnything = false
-	dec.decoder = *yaml.NewDecoder(readerToUse)
+	// Buffer the whole processed stream so folded block scalars can be mapped
+	// back to their source lines at decode time (issue #1468).
+	data, err := io.ReadAll(readerToUse)
+	if err != nil {
+		return err
+	}
+	dec.sourceLines = splitSourceLines(data)
+	dec.decoder = *yaml.NewDecoder(bytes.NewReader(data))
 	dec.firstFile = false
 	dec.documentIndex = 0
 	dec.anchorMap = make(map[string]*CandidateNode)
 	return nil
+}
+
+// splitSourceLines splits decoded stream bytes into lines, normalising CRLF
+// so 1-based yaml.Node line numbers index the result.
+func splitSourceLines(data []byte) []string {
+	return strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 }
 
 func (dec *yamlDecoder) Decode() (*CandidateNode, error) {
@@ -167,6 +185,7 @@ func (dec *yamlDecoder) Decode() (*CandidateNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	captureFoldedScalarOriginals(&candidateNode, dec.sourceLines)
 
 	candidateNode.HeadComment = yamlNode.HeadComment + candidateNode.HeadComment
 	candidateNode.FootComment = yamlNode.FootComment + candidateNode.FootComment

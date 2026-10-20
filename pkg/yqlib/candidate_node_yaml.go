@@ -75,7 +75,15 @@ func (o *CandidateNode) copyToYamlNode(node *yaml.Node) {
 	node.Style = MapToYamlStyle(o.Style)
 
 	node.Tag = o.Tag
-	node.Value = o.Value
+	if o.blockScalarOriginal.matches(o) && o.blockScalarOriginal.placeholder != "" {
+		// Emit a placeholder; the yaml encoder splices the original block
+		// text back in after dumping (#1468). Plain style so the dumper
+		// writes the placeholder verbatim.
+		node.Value = o.blockScalarOriginal.placeholder
+		node.Style = 0
+	} else {
+		node.Value = o.Value
+	}
 	node.Anchor = o.Anchor
 
 	node.HeadComment = o.HeadComment
